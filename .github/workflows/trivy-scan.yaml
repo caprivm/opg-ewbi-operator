@@ -1,0 +1,70 @@
+name: CVE Scanning with Trivy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/add-sca-analysis
+
+jobs:
+  trivy-sca-scan:
+    name: Static Code Analysis with Trivy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: "read"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Create CSV template for Trivy
+        run: |
+          mkdir -p .github/templates
+          cat > .github/templates/csv.tpl << 'EOF'
+          CVE ID,Package,Installed Version,Fixed Version,Severity,Title
+          {{- range .  }}
+          {{- range .Vulnerabilities }}
+          {{ .VulnerabilityID }},{{ .PkgName }},{{ .InstalledVersion }},{{ .FixedVersion }},{{ .Severity }},"{{ .Title }}"
+          {{- end }}
+          {{- end }}
+          EOF
+
+      - name: Manual Trivy Setup
+        uses: aquasecurity/setup-trivy@e6c2c5e321ed9123bda567646e2f96565e34abe1 # v0.2.4
+        with:
+          cache: false
+
+      - name: Trivy Scan
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # 0.33.1
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "template"
+          template: "@.github/templates/csv.tpl"
+          output: "trivy-cve-report.csv"
+          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+          vuln-type: "library"
+          scanners: "vuln"
+
+      - name: Upload CVE Report as Artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: trivy-cve-report-${{ github.run_number }}
+          path: trivy-cve-report.csv
+          retention-days: 2
+
+      - name: Display scan summary
+        if: always()
+        run: |
+          echo "### 🔍 Trivy Security Scan Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f trivy-cve-report.csv ]; then
+            LINE_COUNT=$(wc -l < trivy-cve-report.csv)
+            VULN_COUNT=$((LINE_COUNT - 1))
+            echo "✅ Scan completed successfully!" >> $GITHUB_STEP_SUMMARY
+            echo "📊 Total vulnerabilities found: **$VULN_COUNT**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "📥 Download the full CVE report from the artifacts section" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ No report generated" >> $GITHUB_STEP_SUMMARY
+          fi
